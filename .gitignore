@@ -1,0 +1,4 @@
+tools/
+firmware/build/
+vendordep/build/
+__pycache__/
