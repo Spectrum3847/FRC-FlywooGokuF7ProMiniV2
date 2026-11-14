@@ -49,6 +49,17 @@ import org.wpilib.util.Alert;
  * Commands from different threads don't wait for each other, so each timeout is a true maximum.
  * Typical replies take a few milliseconds; the timeout only matters when the IMU is unplugged.
  *
+ * <p><b>Threads and process-wide effects:</b> each hardware IMU runs a daemon reader thread and a
+ * daemon writer thread. One shared daemon thread updates the dashboard {@code Alert}s 4 times a
+ * second, so alerts change from that thread, not the robot main loop. On Linux, loading this
+ * library makes the whole robot process ignore SIGHUP: Java can't open a tty without it possibly
+ * becoming the controlling terminal, and unplugging the IMU would otherwise send SIGHUP and kill
+ * the robot program.
+ *
+ * <p><b>Finding the IMU:</b> on Linux, boards are found by their USB product string "GokuIMU"
+ * (from sysfs), not by VID/PID, so other USB-serial devices on /dev/ttyACM* (e.g. a CANable) are
+ * never opened. On Windows, they are found by VID/PID 1209:0001 in the registry.
+ *
  * <pre>{@code
  * GokuIMU imu = new GokuIMU();
  * Rotation2d heading = imu.getRotation2d();
@@ -77,6 +88,10 @@ public final class GokuIMU implements AutoCloseable, TelemetryLoggable {
   /**
    * Every value from a single IMU frame, so they are consistent with each other (good for logging
    * and AdvantageKit-style replay). Angles in degrees, rates in deg/s, acceleration in g.
+   *
+   * @param faultFlags active faults only ({@code FAULT_*} bits); 0 means healthy
+   * @param stickyFaultFlags faults seen since the last clearStickyFaults() ({@code FAULT_*} bits)
+   * @param statusFlags non-fault status bits ({@code STATUS_*}), e.g. {@link #STATUS_CALIBRATED}
    */
   public record Inputs(
       double timestamp,
@@ -99,7 +114,8 @@ public final class GokuIMU implements AutoCloseable, TelemetryLoggable {
       double accelZG,
       double temperatureC,
       int faultFlags,
-      int stickyFaultFlags)
+      int stickyFaultFlags,
+      int statusFlags)
       implements TelemetryLoggable {
     public Rotation2d getRotation2d() {
       return Rotation2d.fromDegrees(yawDeg);
@@ -126,8 +142,33 @@ public final class GokuIMU implements AutoCloseable, TelemetryLoggable {
       table.log("Temperature", temperatureC);
       table.log("FaultFlags", faultFlags);
       table.log("StickyFaultFlags", stickyFaultFlags);
+      table.log("StatusFlags", statusFlags);
     }
   }
+
+  // Bit values for Inputs.faultFlags / stickyFaultFlags (faults) and statusFlags (status).
+  /** Fault: IMU chip not responding. */
+  public static final int FAULT_HARDWARE = Protocol.FLAG_HW_FAULT;
+  /** Fault: gyro hit its +/-2000 deg/s limit. */
+  public static final int FAULT_SATURATED_GYRO = Protocol.FLAG_GYRO_SAT;
+  /** Fault: accelerometer hit its +/-16 g limit. */
+  public static final int FAULT_SATURATED_ACCEL = Protocol.FLAG_ACCEL_SAT;
+  /** Fault: crystal failed, running on the internal clock. */
+  public static final int FAULT_CLOCK = Protocol.FLAG_HSE_FAIL;
+  /** Fault: a sensor sample was late or missed. */
+  public static final int FAULT_SAMPLE_MISSED = Protocol.FLAG_SAMPLE_MISSED;
+  /** Status: gyro bias calibration has completed (the normal, healthy state). */
+  public static final int STATUS_CALIBRATED = Protocol.FLAG_BIAS_VALID;
+  /** Status: the IMU sees motion. */
+  public static final int STATUS_MOVING = Protocol.FLAG_MOVING;
+  /** Status: first few seconds after the IMU booted. */
+  public static final int STATUS_BOOTING = Protocol.FLAG_BOOTING;
+  /** Status: no saved configuration on the IMU, defaults in use. */
+  public static final int STATUS_DEFAULT_CONFIG = Protocol.FLAG_CFG_DEFAULT;
+
+  private static final int FAULT_MASK =
+      FAULT_HARDWARE | FAULT_SATURATED_GYRO | FAULT_SATURATED_ACCEL | FAULT_CLOCK
+          | FAULT_SAMPLE_MISSED;
 
   /** Latest decoded frame plus its estimated measurement time in robot time. */
   record Snapshot(Protocol.State s, double robotTime) {}
@@ -1051,7 +1092,8 @@ public final class GokuIMU implements AutoCloseable, TelemetryLoggable {
 
   /**
    * All values from one IMU frame, consistent with each other (use this for logging/replay, or
-   * whenever you read several values together). Non-blocking.
+   * whenever you read several values together). Non-blocking. Allocates one small record per call;
+   * for allocation-free reads in fast loops use {@link #readInputs(InputsBuffer)}.
    */
   public Inputs getInputs() {
     Snapshot snap = snapshot();
@@ -1059,8 +1101,65 @@ public final class GokuIMU implements AutoCloseable, TelemetryLoggable {
     return new Inputs(
         snap.robotTime(), isConnected(), s.has(Protocol.FLAG_BIAS_VALID),
         s.has(Protocol.FLAG_MOVING), s.yaw(), s.pitch(), s.roll(), s.qw(), s.qx(), s.qy(), s.qz(),
-        s.gyroX(), s.gyroY(), s.gyroZ(), worldRates(s)[2], s.accelX(), s.accelY(), s.accelZ(),
-        s.temperature(), s.flags(), s.stickyFlags());
+        s.gyroX(), s.gyroY(), s.gyroZ(), worldRateZ(s), s.accelX(), s.accelY(), s.accelZ(),
+        s.temperature(), s.flags() & FAULT_MASK, s.stickyFlags() & FAULT_MASK,
+        s.flags() & ~FAULT_MASK);
+  }
+
+  /**
+   * Allocation-free version of {@link #getInputs()}: copies every value from one IMU frame into a
+   * caller-owned buffer (reuse one buffer per loop). Non-blocking.
+   */
+  public void readInputs(InputsBuffer out) {
+    Snapshot snap = snapshot();
+    Protocol.State s = snap.s();
+    out.timestamp = snap.robotTime();
+    out.connected = isConnected();
+    out.calibrated = s.has(Protocol.FLAG_BIAS_VALID);
+    out.moving = s.has(Protocol.FLAG_MOVING);
+    out.yawDeg = s.yaw();
+    out.pitchDeg = s.pitch();
+    out.rollDeg = s.roll();
+    out.qw = s.qw();
+    out.qx = s.qx();
+    out.qy = s.qy();
+    out.qz = s.qz();
+    out.rateXDeviceDps = s.gyroX();
+    out.rateYDeviceDps = s.gyroY();
+    out.rateZDeviceDps = s.gyroZ();
+    out.yawRateWorldDps = worldRateZ(s);
+    out.accelXG = s.accelX();
+    out.accelYG = s.accelY();
+    out.accelZG = s.accelZ();
+    out.temperatureC = s.temperature();
+    out.faultFlags = s.flags() & FAULT_MASK;
+    out.stickyFaultFlags = s.stickyFlags() & FAULT_MASK;
+    out.statusFlags = s.flags() & ~FAULT_MASK;
+  }
+
+  /** Mutable holder for {@link #readInputs(InputsBuffer)}. Same fields and units as {@link Inputs}. */
+  public static final class InputsBuffer {
+    public double timestamp;
+    public boolean connected, calibrated, moving;
+    public double yawDeg, pitchDeg, rollDeg;
+    public double qw = 1, qx, qy, qz;
+    public double rateXDeviceDps, rateYDeviceDps, rateZDeviceDps, yawRateWorldDps;
+    public double accelXG, accelYG, accelZG;
+    public double temperatureC;
+    /** Active faults only; see {@link GokuIMU#FAULT_HARDWARE} etc. 0 means healthy. */
+    public int faultFlags;
+    /** Faults seen since the last clearStickyFaults(). */
+    public int stickyFaultFlags;
+    /** Non-fault status bits; see {@link GokuIMU#STATUS_CALIBRATED} etc. */
+    public int statusFlags;
+  }
+
+  private static double worldRateZ(Protocol.State s) {
+    // Z component of q * v_body * q^-1, without allocating.
+    double w = s.qw(), x = s.qx(), y = s.qy(), z = s.qz();
+    double vx = s.gyroX(), vy = s.gyroY(), vz = s.gyroZ();
+    double tx = 2 * (y * vz - z * vy), ty = 2 * (z * vx - x * vz), tz = 2 * (x * vy - y * vx);
+    return vz + w * tz + (x * ty - y * tx);
   }
 
   /** Continuous yaw in degrees, CCW positive (gyro-style name). Non-blocking. */

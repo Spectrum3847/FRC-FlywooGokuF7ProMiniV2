@@ -16,7 +16,7 @@ import subprocess
 import sys
 import zipfile
 
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 GROUP = "io.github.frcgokuimu"
 ARTIFACT = "GokuIMU-java"
 WPILIB_VERSION = "2027.0.0-alpha-8"

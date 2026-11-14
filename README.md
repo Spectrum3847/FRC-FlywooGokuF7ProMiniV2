@@ -13,7 +13,7 @@ It is meant for training robots, where a Pigeon 2 costs more than it is worth.
 | Link | USB CDC (shows up as `/dev/ttyACM*`), 1–1000 Hz stream, 100 Hz by default |
 | Fusion | 6-axis complementary filter on the board: gravity corrects pitch/roll, yaw comes from the gyro only |
 | Calibration | Gyro bias is recalibrated automatically whenever the board is still (Pigeon "no-motion" calibration) |
-| Versions | firmware 0.2.0, vendordep 0.2.2 (protocol v2: both must be 0.2+), WPILib 2027.0.0-alpha-8, Java only |
+| Versions | firmware 0.2.0, vendordep 0.2.3 (protocol v2: both must be 0.2+), WPILib 2027.0.0-alpha-8, Java only |
 
 ## Layout
 
@@ -157,6 +157,19 @@ In desktop simulation, `new GokuIMU()` uses a simulated IMU automatically.
 `vendordep/run-desktop-test.sh [COMx]` runs the simulation tests, plus hardware tests against a
 plugged-in board, using WPILib's desktop native libraries.
 
+### Threads, signals and device discovery
+
+* **Threads:** each IMU runs a daemon reader thread and a daemon writer thread. One shared daemon
+  thread sets the dashboard alerts 4 times a second, not the robot main loop.
+* **SIGHUP:** on Linux, the library makes the whole robot process ignore SIGHUP. Without that,
+  unplugging the IMU's USB cable could kill the robot program, because Java can't stop the tty
+  from becoming the controlling terminal.
+* **Discovery:** on Linux, boards are found by their USB product string `GokuIMU` in sysfs, not
+  by VID/PID, so other `/dev/ttyACM*` devices such as a CANable are never opened. On Windows they
+  are found by VID/PID `1209:0001` in the registry.
+* **Tested on a real Systemcore:** a CANable on `/dev/ttyACM0` and the Goku on `/dev/ttyACM1`.
+  No udev rule was needed, because the robot user `systemcore` is in the `dialout` group.
+
 ### Logging and dashboards
 
 `GokuIMU` implements `TelemetryLoggable`, so `Telemetry.log("imu", imu)` and Epilogue `@Logged`
@@ -167,6 +180,10 @@ both work.
 * It also logs `Rotation2d` and `Rotation3d` structs, rates, acceleration, faults and latency, all
   taken from one frame.
 * `getInputs()` returns the same frame as an immutable record for AdvantageKit-style replay.
+  `readInputs(buffer)` fills a reusable `GokuIMU.InputsBuffer` instead, with no allocation, for
+  100–250 Hz loops.
+* `faultFlags` and `stickyFaultFlags` hold only real faults (`GokuIMU.FAULT_*`), so 0 means
+  healthy. Status bits such as `STATUS_CALIBRATED` and `STATUS_MOVING` are in `statusFlags`.
 * Dashboard alerts (disconnected, hardware fault, reboot while enabled) update on their own 4
   times a second, whether or not the IMU is logged.
 
@@ -225,9 +242,9 @@ MEMS gyros have about 0.5% scale error, which is roughly 2° per full turn. To t
 
 ## Not yet tested
 
-* **Not yet run on a real Systemcore.** The vendordep opens `/dev/ttyACM*` directly and runs
-  `stty raw -echo`, and it finds boards through `/sys/class/tty/*/device/../product`. If the
-  robot program's user can't open the device, add this udev rule:
+* **Systemcore:** connecting, calibrating and reading at rest all work (MiniSwerve PR #30).
+  Accuracy while moving and unplugging/replugging while running are still untested. If a
+  different image's robot user can't open the device, add this udev rule:
   `SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", MODE="0666"`
 * Not yet tested on a moving robot: dynamic accuracy, tilt under acceleration, gyro trim.
 * There is no C++ library yet.

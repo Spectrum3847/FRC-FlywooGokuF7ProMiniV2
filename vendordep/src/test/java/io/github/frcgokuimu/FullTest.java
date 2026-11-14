@@ -50,6 +50,13 @@ public class FullTest {
         "quaternion yaw matches", near(Math.toDegrees(imu.getRotation3d().getZ()), 10, 1e-6));
     GokuIMU.Inputs in = imu.getInputs();
     check("inputs consistent", near(in.yawDeg(), 10, 1e-6) && in.connected());
+    check("calibrated is a status bit, not a fault",
+        in.faultFlags() == 0 && (in.statusFlags() & GokuIMU.STATUS_CALIBRATED) != 0);
+    var buf = new GokuIMU.InputsBuffer();
+    imu.readInputs(buf);
+    check("readInputs matches getInputs",
+        near(buf.yawDeg, in.yawDeg(), 1e-9) && near(buf.yawRateWorldDps, in.yawRateWorldDps(), 1e-9)
+            && buf.faultFlags == 0);
     sim.setCalibrated(false);
     check("isCalibrating when uncalibrated", imu.isCalibrating());
     check("waitForCalibration times out", !imu.waitForCalibration(0.05));
