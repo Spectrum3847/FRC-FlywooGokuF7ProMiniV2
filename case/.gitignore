@@ -1,0 +1,8 @@
+# Flywoo's 3D model is theirs: fetch it with fetch_board_model.py instead of committing it
+flywoo_model/
+goku_board.stl
+# scratch output from cadcheck / kicad
+*_out/
+kicad/*.kicad_prl
+kicad/goku.glb
+kicad/goku.step

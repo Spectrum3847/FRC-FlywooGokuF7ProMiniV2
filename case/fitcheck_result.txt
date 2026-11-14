@@ -1,0 +1,31 @@
+tray: watertight True, volume 3102 mm3
+lid: watertight True, volume 2713 mm3
+tray/lid overlap volume: 1.043 mm3
+tray: board points inside solid 1496  z 4.78..4.88
+  tray: closest approaches (mm, at x y z):
+    0.00  at   13.7   -5.2   4.9
+    0.00  at   13.8   -3.5   4.9
+    0.00  at    7.8   11.2   4.9
+    0.00  at   13.7    0.2   4.9
+    0.00  at   14.5    9.2   4.9
+    0.00  at   -8.0    8.6   4.9
+    0.00  at   -7.9   11.4   4.9
+    0.00  at   13.7    4.5   4.8
+    0.01  at   14.5    5.9   4.9
+    0.01  at  -12.4  -10.4   4.9
+    0.01  at  -12.3    9.1   4.9
+    0.01  at  -12.2  -10.6   4.9
+lid: board points inside solid 0
+  lid: closest approaches (mm, at x y z):
+    0.12  at  -12.3   -9.9   6.4
+    0.12  at  -12.2    9.6   6.4
+    0.12  at  -12.1   11.0   6.4
+    0.12  at  -11.9  -11.2   6.4
+    0.12  at  -10.5   12.1   6.4
+    0.12  at  -10.4  -12.2   6.4
+    0.12  at  -10.4    7.8   6.4
+    0.12  at  -10.0   -7.6   6.4
+    0.12  at    7.6   10.1   6.4
+    0.12  at    7.8   -9.9   6.4
+    0.12  at    7.9  -11.0   6.4
+    0.12  at    8.2   11.3   6.4
